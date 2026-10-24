@@ -32,8 +32,8 @@ jobs:
 
       - name: Prove the custom renderer replaced MobileGlues
         run: |
-          test -f build/TitanLD-2.0.0.apk
-          listing="$(unzip -l build/TitanLD-2.0.0.apk)"
+          test -f build/TitanLD-2.0.1.apk
+          listing="$(unzip -l build/TitanLD-2.0.1.apk)"
           if grep -q libmobileglues.so <<<"$listing"; then
             echo "MobileGlues is still in the APK" >&2
             exit 1

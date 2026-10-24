@@ -23,8 +23,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-VERSION_NAME="2.0.0"
-VERSION_CODE="2"
+VERSION_NAME="2.0.1"
+VERSION_CODE="3"
 ABIS=(arm64-v8a armeabi-v7a x86 x86_64)
 MIN_SDK=26
 TARGET_SDK=34

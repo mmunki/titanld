@@ -2,7 +2,7 @@
 
 TitanLD is an Android renderer plug-in for Minecraft: Java Edition launchers
 (Fold Craft Launcher, Zalith Launcher and Pojav-based launchers).  Version
-2.0.0 replaces the MobileGlues packaging of 1.0.0 with **TitanGL**, TitanLD's
+2.0.1 replaces the MobileGlues packaging of 1.0.0 with **TitanGL**, TitanLD's
 own renderer core, built from the C sources in `src/native/`.
 
 TitanGL is not a wrapper around MobileGlues and does not contain a
@@ -68,7 +68,7 @@ and the driver's compile/link log.
 
 ## Install
 
-1. Download `TitanLD-2.0.0.apk` from the release page.
+1. Download `TitanLD-2.0.1.apk` from the release page.
 2. Install it (Android 8.0 or newer, OpenGL ES 3.0 device).
 3. Open TitanLD and tap **Grant storage access**, then allow *All files
    access* (Android 11+) or storage (Android 8-10).
@@ -111,7 +111,7 @@ not needed and the build does not touch the network.
 export ANDROID_HOME=/path/to/android-sdk
 export ANDROID_NDK_HOME=/path/to/android-ndk   # optional, auto-detected
 ./build.sh
-# build/TitanLD-2.0.0.apk
+# build/TitanLD-2.0.1.apk
 ```
 
 Requirements: JDK 17+, Android SDK build-tools (aapt2, d8, zipalign,
