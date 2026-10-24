@@ -19,26 +19,52 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Gradle 9.8.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.1"
+
+      - name: Install the SDK packages this project compiles against
+        run: |
+          sdkmanager="$(command -v sdkmanager || true)"
+          if [ -z "$sdkmanager" ] && [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          if [ -n "$sdkmanager" ]; then
+            yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
+            "$sdkmanager" "platforms;android-37.2" "build-tools;37.0.0" \
+              "ndk;27.3.13750724" >/dev/null 2>&1 \
+              || "$sdkmanager" "platforms;android-37" "build-tools;37.0.0" \
+                 "ndk;27.3.13750724" >/dev/null 2>&1 || true
+          fi
+
       - name: Show Android SDK and NDK
         run: |
+          ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-$ANDROID_HOME/ndk/27.3.13750724}}"
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "ANDROID_NDK_HOME=$ndk"
           ls "$ANDROID_HOME/build-tools" | sort -V | tail -3
           ls "$ANDROID_HOME/platforms" | sort -V | tail -3
-          ls "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" 2>/dev/null || true
+          ls "$ndk/toolchains/llvm/prebuilt" 2>/dev/null || true
 
       - name: Build, test every ABI and verify the APK
         run: bash build.sh
 
       - name: Prove the custom renderer replaced MobileGlues
         run: |
-          test -f build/TitanLD-2.0.1.apk
-          listing="$(unzip -l build/TitanLD-2.0.1.apk)"
+          test -f build/TitanLD-3.0.0.apk
+          listing="$(unzip -l build/TitanLD-3.0.0.apk)"
           if grep -q libmobileglues.so <<<"$listing"; then
             echo "MobileGlues is still in the APK" >&2
             exit 1
           fi
           grep -E 'lib/.+/libtitanld.so' <<<"$listing"
+          aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+          if "$aapt2" dump permissions build/TitanLD-3.0.0.apk \
+              | grep -q android.permission.INTERNET; then
+            echo "TitanLD must not request INTERNET" >&2
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

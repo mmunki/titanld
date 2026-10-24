@@ -1,33 +1,47 @@
 #!/usr/bin/env bash
 # ============================================================================
-# build.sh -- build TitanLD's release APK with the Android SDK command line
-# tools and the NDK.  No Gradle, no network access.
+# build.sh -- build TitanLD.
+#
+#   build.sh                native core + Gradle release APK + verification
+#   build.sh --native-only  only the four libtitanld.so files and host tests
 #
 # Inputs (environment, all optional):
-#   ANDROID_HOME / ANDROID_SDK_ROOT   the Android SDK location
-#   ANDROID_NDK_HOME / ANDROID_NDK_ROOT  the NDK location (auto-detected under
-#                                     $ANDROID_HOME/ndk when not set)
-#   TITANLD_KEYSTORE                  an existing signing keystore
-#   TITANLD_KEYSTORE_PASSWORD         its store password
-#   TITANLD_KEY_ALIAS                 the key alias
-#   TITANLD_KEY_PASSWORD              the key password
+#   ANDROID_HOME / ANDROID_SDK_ROOT      the Android SDK location
+#   ANDROID_NDK_HOME / ANDROID_NDK_ROOT  the NDK location
+#   TITANLD_KEYSTORE                     an existing signing keystore
+#   TITANLD_KEYSTORE_PASSWORD            its store password
+#   TITANLD_KEY_ALIAS                    the key alias
+#   TITANLD_KEY_PASSWORD                 the key password
+#   GRADLE_BIN                           the gradle executable (default: gradle)
 #
 # Output: build/TitanLD-<version>.apk
 #
-# The renderer is TitanGL, TitanLD's own C core in src/native.  MobileGlues is
-# no longer downloaded or packaged; the APK contains only libtitanld.so built
-# from this tree.
+# TitanGL, the renderer core in src/native, is built for every ABI into
+# build/native.  The Gradle app packages those libraries; no build output is
+# ever committed and no renderer library is downloaded.
 # ============================================================================
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-VERSION_NAME="2.0.1"
-VERSION_CODE="3"
+VERSION_NAME="3.0.0"
+VERSION_CODE="4"
 ABIS=(arm64-v8a armeabi-v7a x86 x86_64)
 MIN_SDK=26
-TARGET_SDK=34
+TARGET_SDK=37
+
+NATIVE_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --native-only) NATIVE_ONLY=1 ;;
+    -h|--help)
+      sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) printf 'error: unknown argument: %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
 
 log()  { printf '==> %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -103,37 +117,38 @@ log "build-tools:  $(basename "$BUILD_TOOLS")"
 log "platform:     $(basename "$PLATFORM")"
 log "NDK:          $NDK"
 
-command -v javac   >/dev/null || die "javac (JDK 17+) is required"
-command -v keytool >/dev/null || die "keytool (JDK 17+) is required"
-command -v unzip   >/dev/null || die "unzip is required"
-command -v zip     >/dev/null || die "zip is required"
+command -v unzip     >/dev/null || die "unzip is required"
+command -v zip       >/dev/null || die "zip is required"
 command -v sha256sum >/dev/null || die "sha256sum is required"
-command -v file    >/dev/null || die "file is required"
+command -v file      >/dev/null || die "file is required"
 
 WORK="$ROOT/build"
-rm -rf "$WORK"
-mkdir -p "$WORK/lib" "$WORK/gen" "$WORK/classes" "$WORK/dex" "$WORK/assets" "$WORK/test"
+NATIVE="$WORK/native"
 
 # ------------------------------------------------------- host translator test
 HOST_CC="${HOST_CC:-cc}"
 log "running the host shader-translator tests"
+mkdir -p "$WORK/test"
 "$HOST_CC" -std=c11 -O2 -Wall -Wextra \
   -o "$WORK/test/glsl_test" tests/glsl_test.c src/native/glsl.c
 "$WORK/test/glsl_test"
 
 # ------------------------------------------------------------- TitanGL core
+rm -rf "$NATIVE" "$WORK/obj"
+mkdir -p "$NATIVE"
+
 build_abi() {
   local abi="$1"
   local obj="$WORK/obj/$abi"
   local cc="${CC[$abi]}"
   local src
-  mkdir -p "$obj" "$WORK/lib/$abi"
+  mkdir -p "$obj" "$NATIVE/$abi"
   for src in src/native/*.c; do
     "$cc" -std=c11 -O2 -fPIC -Wall -Wextra -Wno-unused-parameter \
       -Isrc/native -DANDROID \
       -c "$src" -o "$obj/$(basename "${src%.c}").o"
   done
-  "$cc" -shared -o "$WORK/lib/$abi/libtitanld.so" "$obj"/*.o \
+  "$cc" -shared -o "$NATIVE/$abi/libtitanld.so" "$obj"/*.o \
     -Wl,-soname,libtitanld.so -Wl,--no-undefined \
     -Wl,-z,relro,-z,now \
     -llog -lEGL -landroid -ldl -lm
@@ -149,73 +164,46 @@ declare -A EXPECT_MACHINE=(
 for abi in "${ABIS[@]}"; do
   log "building TitanGL for $abi"
   build_abi "$abi"
-  lib="$WORK/lib/$abi/libtitanld.so"
+  lib="$NATIVE/$abi/libtitanld.so"
   [ -s "$lib" ] || die "TitanGL did not produce $lib"
   machine="$("$LLVM_READELF" -h "$lib" | awk '/Machine:/{print substr($0, index($0,$2))}')"
   case "$machine" in
     *"${EXPECT_MACHINE[$abi]}"*) ;;
-    *) die "lib/$abi has the wrong ELF machine: $machine" ;;
+    *) die "native/$abi has the wrong ELF machine: $machine" ;;
   esac
-  # Capture the tool output before grepping.  A `tool | grep -q` pipeline
-  # under `set -o pipefail` is racy: grep exits at the first match, the tool
-  # gets SIGPIPE and the pipeline reports failure even though the symbol was
-  # found.
   nm_out="$("$LLVM_NM" -D --defined-only "$lib")"
-  for sym in eglGetProcAddress eglCreateContext glCreateShader glShaderSource \
-             glGetString glDrawElementsBaseVertex glMapBuffer; do
+  for sym in eglGetProcAddress eglChooseConfig eglGetConfigAttrib eglQueryString \
+             eglBindAPI eglQueryAPI glXGetProcAddress glXGetProcAddressARB \
+             eglCreateContext glCreateShader glShaderSource glGetString \
+             glDrawElementsBaseVertex glDrawElementsInstancedBaseVertex glMapBuffer; do
     grep -q " $sym\$" <<<"$nm_out" \
-      || die "lib/$abi is missing the exported symbol $sym"
+      || die "native/$abi is missing the exported symbol $sym"
   done
   dyn_out="$("$LLVM_READELF" -d "$lib")"
   if grep -q 'libGLESv3\.so' <<<"$dyn_out"; then
-    die "lib/$abi must not hard-link libGLESv3.so; it dispatches through dlopen"
+    die "native/$abi must not hard-link libGLESv3.so; it dispatches through dlopen"
   fi
   log "ABI $abi: $machine, $(stat -c%s "$lib") bytes, symbols OK"
 done
 
-# ----------------------------------------------------------------- resources
-cp -R "$ROOT/assets/." "$WORK/assets/" 2>/dev/null || true
-# The MobileGlues licence belongs to the 1.0.0 release; it is kept in the
-# source tree but is not part of the custom-renderer APK.
-rm -f "$WORK/assets/licenses/MobileGlues-LGPL-2.1.txt"
-cp "$ROOT/LICENSE" "$WORK/assets/LICENSE.txt"
-"$BUILD_TOOLS/aapt2" compile --dir "$ROOT/res" -o "$WORK/res.zip"
-"$BUILD_TOOLS/aapt2" link \
-  -o "$WORK/base.apk" \
-  -I "$ANDROID_JAR" \
-  --manifest "$ROOT/AndroidManifest.xml" \
-  --java "$WORK/gen" \
-  -A "$WORK/assets" \
-  --min-sdk-version "$MIN_SDK" \
-  --target-sdk-version "$TARGET_SDK" \
-  --version-code "$VERSION_CODE" \
-  --version-name "$VERSION_NAME" \
-  --auto-add-overlay \
-  "$WORK/res.zip"
-log "resources linked"
+if [ "$NATIVE_ONLY" = 1 ]; then
+  log "native core ready in $NATIVE"
+  exit 0
+fi
 
-# ---------------------------------------------------------------------- Java
-mapfile -t SOURCES < <(find "$ROOT/src" "$WORK/gen" -name '*.java' | sort)
-[ "${#SOURCES[@]}" -gt 0 ] || die "no Java sources found"
-javac -encoding UTF-8 -source 17 -target 17 \
-  -classpath "$ANDROID_JAR" -d "$WORK/classes" "${SOURCES[@]}"
-"$BUILD_TOOLS/d8" --release --min-api "$MIN_SDK" --lib "$ANDROID_JAR" \
-  --output "$WORK/dex" $(find "$WORK/classes" -name '*.class' | sort)
-[ -f "$WORK/dex/classes.dex" ] || die "d8 produced no classes.dex"
-log "Java compiled and dexed"
+# ------------------------------------------------------------------- Gradle
+command -v javac   >/dev/null || die "javac (JDK 17+) is required"
+command -v keytool >/dev/null || die "keytool (JDK 17+) is required"
+GRADLE="${GRADLE_BIN:-gradle}"
+command -v "$GRADLE" >/dev/null || die "gradle is required (set GRADLE_BIN)"
 
-# ------------------------------------------------------------------- package
-cp "$WORK/base.apk" "$WORK/unsigned.apk"
-( cd "$WORK/dex" && zip -q "$WORK/unsigned.apk" classes.dex )
-( cd "$WORK" && zip -q -r unsigned.apk lib )
-"$BUILD_TOOLS/zipalign" -f -p 4 "$WORK/unsigned.apk" "$WORK/aligned.apk"
-
-KEYSTORE="${TITANLD_KEYSTORE:-$WORK/titanld-release.jks}"
+KEYSTORE="${TITANLD_KEYSTORE:-$WORK/keys/titanld-release.jks}"
 KS_PASS="${TITANLD_KEYSTORE_PASSWORD:-titanld-build}"
 KEY_ALIAS="${TITANLD_KEY_ALIAS:-titanld}"
 KEY_PASS="${TITANLD_KEY_PASSWORD:-titanld-build}"
 if [ ! -f "$KEYSTORE" ]; then
   log "generating a build signing key (set TITANLD_KEYSTORE to reuse one)"
+  mkdir -p "$(dirname "$KEYSTORE")"
   keytool -genkeypair -noprompt \
     -keystore "$KEYSTORE" -storetype PKCS12 \
     -storepass "$KS_PASS" -keypass "$KEY_PASS" \
@@ -223,12 +211,18 @@ if [ ! -f "$KEYSTORE" ]; then
     -dname "CN=TitanLD, OU=TitanLD, O=TitanLD, L=Unknown, ST=Unknown, C=US"
 fi
 
+export TITANLD_KEYSTORE="$KEYSTORE"
+export TITANLD_KEYSTORE_PASSWORD="$KS_PASS"
+export TITANLD_KEY_ALIAS="$KEY_ALIAS"
+export TITANLD_KEY_PASSWORD="$KEY_PASS"
+
+log "building the Miuix manager and packaging the release APK"
+"$GRADLE" --no-daemon :app:assembleRelease
+
+GRADLE_APK="$ROOT/app/build/outputs/apk/release/app-release.apk"
+[ -f "$GRADLE_APK" ] || die "Gradle did not produce $GRADLE_APK"
 OUT="$ROOT/build/TitanLD-${VERSION_NAME}.apk"
-"$BUILD_TOOLS/apksigner" sign \
-  --ks "$KEYSTORE" --ks-key-alias "$KEY_ALIAS" \
-  --ks-pass "pass:$KS_PASS" --key-pass "pass:$KEY_PASS" \
-  --out "$OUT" "$WORK/aligned.apk"
-"$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$OUT" >&2
+cp -f "$GRADLE_APK" "$OUT"
 log "signed: $OUT"
 
 # ---------------------------------------------------------------- verification
@@ -249,13 +243,27 @@ grep -q "package: name='io.github.mmunki.titanld'" <<<"$BADGING" \
   || die "unexpected package name"
 grep -q "application-label:'TitanLD'" <<<"$BADGING" \
   || die "unexpected application label"
-"$BUILD_TOOLS/dexdump" "$OUT" > "$WORK/dexdump.txt" 2>/dev/null
-grep -q 'Lio/github/mmunki/titanld/MainActivity;' "$WORK/dexdump.txt" \
-  || die "MainActivity is missing from classes.dex"
-unzip -p "$OUT" "assets/THIRD_PARTY_NOTICES.md" >/dev/null \
-  || die "third-party notices are missing from the APK"
+grep -q "versionName='${VERSION_NAME}'" <<<"$BADGING" \
+  || die "unexpected version name"
+grep -q "versionCode='${VERSION_CODE}'" <<<"$BADGING" \
+  || die "unexpected version code"
+grep -q "targetSdkVersion:'${TARGET_SDK}'" <<<"$BADGING" \
+  || die "unexpected target SDK"
 for abi in "${ABIS[@]}"; do
   grep -q "'$abi'" <<<"$BADGING" || die "badging does not list ABI $abi"
 done
-log "APK verified: package, label, dex, signature, notices and all four ABIs"
+
+"$BUILD_TOOLS/dexdump" "$OUT" > "$WORK/dexdump.txt" 2>/dev/null
+grep -q 'Lio/github/mmunki/titanld/MainActivity;' "$WORK/dexdump.txt" \
+  || die "MainActivity is missing from classes.dex"
+grep -q 'Lio/github/mmunki/titanld/TitanStorage;' "$WORK/dexdump.txt" \
+  || die "TitanStorage is missing from classes.dex"
+
+unzip -p "$OUT" "assets/LICENSE.txt" >/dev/null \
+  || die "the MIT licence is missing from the APK"
+unzip -p "$OUT" "assets/THIRD_PARTY_NOTICES.md" >/dev/null \
+  || die "third-party notices are missing from the APK"
+
+"$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$OUT" >&2
+log "APK verified: package, version, label, dex, signature, assets and all four ABIs"
 printf '\n%s\n' "$OUT"

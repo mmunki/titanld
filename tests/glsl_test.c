@@ -183,6 +183,28 @@ static void test_uniform_block_binding(void)
     titangl_shader_free(&s);
 }
 
+
+static void test_extension_order(void)
+{
+    const char *src =
+        "#version 150\n"
+        "#extension GL_OES_standard_derivatives : enable\n"
+        "in vec2 uv;\n"
+        "out vec4 color;\n"
+        "void main() { color = vec4(uv, 0.0, 1.0); }\n";
+    titangl_shader s;
+    check(titangl_translate_shader(src, strlen(src), 0, &s) == 0, "extension order translates");
+    const char *version = s.text ? strstr(s.text, "#version") : NULL;
+    const char *extension = s.text ? strstr(s.text, "#extension GL_OES_standard_derivatives") : NULL;
+    const char *precision = s.text ? strstr(s.text, "precision highp float;") : NULL;
+    check(version && extension && precision, "extension order markers present");
+    if (version && extension && precision) {
+        check(version < extension, "extension follows #version");
+        check(extension < precision, "extension precedes precision declarations");
+    }
+    titangl_shader_free(&s);
+}
+
 static void test_es_source_passthrough(void)
 {
     const char *src =
@@ -208,6 +230,7 @@ int main(void)
     test_comments_are_not_rewritten();
     test_desktop_extensions_dropped();
     test_uniform_block_binding();
+    test_extension_order();
     test_es_source_passthrough();
 
     if (failures) {

@@ -12,11 +12,22 @@ OpenGL ES through EGL.  TitanGL sits between the two:
 1. `eglCreateContext` throws away the requested desktop version/profile
    attributes, binds `EGL_OPENGL_ES_API` and creates an ES 3 context (retrying
    ES 2 only if ES 3 is unavailable).
-2. `eglGetProcAddress` returns TitanGL's wrappers for the calls that need
-   translation or emulation, and the system driver's function for everything
-   else.
-3. `glGetString` / `glGetIntegerv` report a desktop version (4.6 by default)
-   so the game selects its core-profile path.
+2. `eglGetProcAddress` and `glXGetProcAddress` return TitanGL's wrappers for
+   EGL and for the GL calls that need translation or emulation.  This is the
+   critical dispatch path: Fold Craft Launcher and Pojav resolve every EGL
+   entry point through the library's `eglGetProcAddress`, so forwarding EGL
+   names to the system driver bypasses the front-end and leaves a black
+   window.
+3. `eglChooseConfig` maps `EGL_OPENGL_BIT` to `EGL_OPENGL_ES3_BIT` and
+   `eglGetConfigAttrib` adds the desktop bit back to `EGL_RENDERABLE_TYPE` and
+   `EGL_CONFORMANT`.  Desktop-only context attributes (profile, flags, debug,
+   forward-compatible, robust access, no-error, reset notification) are
+   filtered out before the ES context is created.
+4. `eglQueryString(EGL_CLIENT_APIS)` reports `OpenGL OpenGL_ES`, and
+   `eglBindAPI` / `eglQueryAPI` keep the desktop API visible to the caller.
+5. `glGetString` / `glGetIntegerv` report a desktop version (4.6 by default)
+   so the game selects its core-profile path; the GLSL version string is
+   derived from the same advertised version.
 
 The real driver functions are resolved with `dlopen("libGLESv3.so")` /
 `dlsym` and `eglGetProcAddress`, never by linking `libGLESv3.so`.  That keeps
@@ -38,7 +49,9 @@ GLES library layout.
   with `glBindAttribLocation` at link time;
 - keeps `layout(std140)` on uniform blocks but removes the desktop-only
   `binding = N` part;
-- drops desktop `#extension` directives that GLSL ES would reject.
+- drops desktop `#extension` directives that GLSL ES would reject;
+- keeps accepted `#extension` lines directly after `#version`, before the
+  precision and output declarations, as the GLSL grammar requires.
 
 Comments and string literals are copied verbatim, so a keyword in a comment is
 not rewritten.  Unsupported constructs are left alone: the driver then emits a
@@ -59,6 +72,7 @@ the build host before any APK is produced.
 | `glMapBuffer` | `glMapBufferRange` over the whole buffer |
 | `glGetBufferSubData` | map/copy/unmap |
 | `glDrawElementsBaseVertex` | rebases the index range into a temporary element buffer |
+| `glDrawElementsInstancedBaseVertex` | uses the GLES 3.2 call when present, otherwise rebases the index range and calls `glDrawElementsInstanced` |
 | `glMultiDrawArrays` / `glMultiDrawElements` | loops over the system draw call |
 | `glGetDoublev` | `glGetFloatv`/`glGetIntegerv` plus conversion |
 | `glBindFragDataLocation` | `glBindFragDataLocationEXT` when the driver exposes it |

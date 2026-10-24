@@ -33,8 +33,8 @@ import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
 
-    private static final String VERSION = "2.0.1";
-    private static final String CORE = "TitanGL 0.1.0 (custom)";
+    private static final String VERSION = "3.0.0";
+    private static final String CORE = "TitanGL 0.2.0 (custom)";
     private static final String TITANLD_DIR = "TitanLD";
     private static final String TITANLD_CONFIG = "config.json";
     private static final int REQ_LEGACY_STORAGE = 4101;

@@ -52,5 +52,6 @@ void *titangl_gl_lookup(const char *name);
 
 /* egl_shim.c */
 void titangl_egl_install(void);
+void *titangl_egl_lookup(const char *name);
 
 #endif /* TITANGL_H */

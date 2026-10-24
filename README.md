@@ -2,8 +2,9 @@
 
 TitanLD is an Android renderer plug-in for Minecraft: Java Edition launchers
 (Fold Craft Launcher, Zalith Launcher and Pojav-based launchers).  Version
-2.0.1 replaces the MobileGlues packaging of 1.0.0 with **TitanGL**, TitanLD's
-own renderer core, built from the C sources in `src/native/`.
+3.0.0 keeps **TitanGL**, TitanLD's own renderer core built from the C sources in
+`src/native/`, and replaces the old hand-drawn manager with a Miuix materials
+UI (Kotlin, Jetpack Compose).
 
 TitanGL is not a wrapper around MobileGlues and does not contain a
 `libmobileglues.so` file.  It creates the OpenGL ES context itself, exports an
@@ -26,7 +27,9 @@ renderer slot.  On top of the core the APK adds:
 - `MANAGE_EXTERNAL_STORAGE` plus the legacy read/write permissions, with an
   in-app flow that opens the correct system screen;
 - creation of `/sdcard/TitanLD/config.json` with TitanGL's settings;
-- a small status screen, a configuration viewer and the licence;
+- a Miuix 0.9.4 materials manager with a blurred aurora background, a bottom
+  navigation bar (Status / Config / About), a configuration viewer and the
+  licence;
 - no `INTERNET` permission at all.
 
 It is **not** a Minecraft launcher and it does not contain Minecraft.
@@ -47,7 +50,7 @@ The design and its limits are described in `docs/RENDERER.md`.
 
 ## Honest limits
 
-TitanGL 0.1.0 is a new renderer, not a drop-in replacement for years of
+TitanGL 0.2.0 is a new renderer, not a drop-in replacement for years of
 MobileGlues / gl4es work.  It is honest about what it does today:
 
 - it translates the shader and state paths used by Minecraft 1.17+ (core
@@ -68,7 +71,7 @@ and the driver's compile/link log.
 
 ## Install
 
-1. Download `TitanLD-2.0.1.apk` from the release page.
+1. Download `TitanLD-3.0.0.apk` from the release page.
 2. Install it (Android 8.0 or newer, OpenGL ES 3.0 device).
 3. Open TitanLD and tap **Grant storage access**, then allow *All files
    access* (Android 11+) or storage (Android 8-10).
@@ -94,7 +97,7 @@ rebuild.
 
 - `glVersion` is the desktop version reported by `glGetString(GL_VERSION)`.
 - `maxGlslCacheSize` is reserved for the on-disk shader cache (reserved, not
-  yet used by 0.1.0).
+  yet used by 0.2.0).
 - `logLevel` is 1 (error) to 4 (debug); the log tag is `TitanGL`.
 - `forceGLESVersion` is 0 to let TitanGL choose, or 2/3 to force a context
   version.
@@ -104,30 +107,34 @@ rebuild.
 
 ## Build
 
-The build uses only the Android SDK command line tools and the NDK; Gradle is
-not needed and the build does not touch the network.
+The build uses the Android SDK command line tools, the NDK and Gradle 9.8.1.
+The first Gradle run downloads the Miuix and AndroidX artifacts from Maven
+Central and Google's Maven repository.
 
 ```bash
 export ANDROID_HOME=/path/to/android-sdk
 export ANDROID_NDK_HOME=/path/to/android-ndk   # optional, auto-detected
 ./build.sh
-# build/TitanLD-2.0.1.apk
+# build/TitanLD-3.0.0.apk
 ```
 
-Requirements: JDK 17+, Android SDK build-tools (aapt2, d8, zipalign,
-apksigner, dexdump), a platform with `android.jar`, and the NDK (clang,
-llvm-nm, llvm-readelf).
+`./build.sh --native-only` builds just the four renderer libraries and runs the
+host translator tests. Requirements: JDK 17+, Android SDK build-tools (aapt2,
+d8, zipalign, apksigner, dexdump), a platform with `android.jar`, the NDK
+(clang, llvm-nm, llvm-readelf) and Gradle 9.8.1.
 
 The build first runs the host-side translator tests (`tests/glsl_test.c`),
 then compiles TitanGL for every ABI and verifies each library:
 
 - the ELF machine matches the ABI;
-- `eglGetProcAddress`, `eglCreateContext`, `glCreateShader`,
-  `glShaderSource`, `glGetString`, `glDrawElementsBaseVertex` and
-  `glMapBuffer` are exported;
+- `eglGetProcAddress`, `eglChooseConfig`, `eglGetConfigAttrib`,
+  `eglQueryString`, `eglBindAPI`, `eglQueryAPI`, `glXGetProcAddress`,
+  `glXGetProcAddressARB`, `eglCreateContext`, `glCreateShader`,
+  `glShaderSource`, `glGetString`, `glDrawElementsBaseVertex`,
+  `glDrawElementsInstancedBaseVertex` and `glMapBuffer` are exported;
 - there is no hard dependency on `libGLESv3.so`;
-- the finished APK contains exactly four `libtitanld.so` entries and no
-  `libmobileglues.so`.
+- the finished APK contains exactly four `libtitanld.so` entries, no
+  `libmobileglues.so`, and no `INTERNET` permission.
 
 The ABI matrix and its result are repeated in the release notes.
 
