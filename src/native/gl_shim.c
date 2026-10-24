@@ -211,6 +211,13 @@ typedef void (*PFN_glBindFragDataLocationEXT)(GLuint program, GLuint colorNumber
                                              const GLchar *name);
 static PFN_glBindFragDataLocationEXT real_glBindFragDataLocationEXT;
 
+/* GLES 3.2 entry point; the NDK's GLES3 headers are 3.0-only. */
+typedef void (*PFN_glDrawElementsInstancedBaseVertex)(GLenum mode, GLsizei count,
+                                                      GLenum type, const void *indices,
+                                                      GLsizei instancecount,
+                                                      GLint basevertex);
+static PFN_glDrawElementsInstancedBaseVertex real_glDrawElementsInstancedBaseVertex;
+
 #define LOAD_REAL(name)                                                        \
     do {                                                                       \
         if (!real_##name) {                                                     \
@@ -642,7 +649,8 @@ const GLubyte *glGetString(GLenum name)
                  titangl_config_state.fake_major, titangl_config_state.fake_minor);
         return (const GLubyte *)g_version_string;
     case GL_SHADING_LANGUAGE_VERSION:
-        snprintf(g_glsl_string, sizeof(g_glsl_string), "4.60 TitanGL");
+        snprintf(g_glsl_string, sizeof(g_glsl_string), "%d.%d0 TitanGL",
+                 titangl_config_state.fake_major, titangl_config_state.fake_minor);
         return (const GLubyte *)g_glsl_string;
     case GL_RENDERER:
         snprintf(g_renderer_string, sizeof(g_renderer_string),
@@ -1005,6 +1013,48 @@ void glDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsize
     glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
 }
 
+void glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type,
+                                       const void *indices, GLsizei instancecount,
+                                       GLint basevertex)
+{
+    LOAD_REAL(glDrawElementsInstancedBaseVertex);
+    LOAD_REAL(glDrawElementsInstanced);
+    LOAD_REAL(glGetIntegerv);
+    LOAD_REAL(glBindBuffer);
+    LOAD_REAL(glDeleteBuffers);
+    if (real_glDrawElementsInstancedBaseVertex) {
+        real_glDrawElementsInstancedBaseVertex(mode, count, type, indices,
+                                               instancecount, basevertex);
+        return;
+    }
+    if (!real_glDrawElementsInstanced) {
+        return;
+    }
+    if (basevertex == 0 || !indices) {
+        real_glDrawElementsInstanced(mode, count, type, indices, instancecount);
+        return;
+    }
+    GLint previous = 0;
+    if (real_glGetIntegerv) {
+        real_glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &previous);
+    }
+    int ok = 0;
+    GLuint temp = rebase_indices(type, (GLintptr)(uintptr_t)indices, count,
+                                 basevertex, &ok);
+    if (!ok) {
+        TLOG(TITANGL_WARN, "instanced base-vertex draw could not be rebased");
+        real_glDrawElementsInstanced(mode, count, type, indices, instancecount);
+        return;
+    }
+    real_glDrawElementsInstanced(mode, count, type, NULL, instancecount);
+    if (real_glBindBuffer) {
+        real_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)previous);
+    }
+    if (temp && real_glDeleteBuffers) {
+        real_glDeleteBuffers(1, &temp);
+    }
+}
+
 void glMultiDrawArrays(GLenum mode, const GLint *first, const GLsizei *count,
                        GLsizei drawcount)
 {
@@ -1293,6 +1343,7 @@ void *titangl_gl_lookup(const char *name)
         PROC(glBindBuffer), PROC(glBufferData), PROC(glGenBuffers),
         PROC(glDeleteBuffers), PROC(glDrawArrays), PROC(glDrawElements),
         PROC(glDrawArraysInstanced), PROC(glDrawElementsInstanced),
+        PROC(glDrawElementsInstancedBaseVertex),
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (strcmp(table[i].name, name) == 0) {

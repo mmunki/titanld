@@ -413,6 +413,25 @@ static int put_token(text_buffer *b, const char *word)
     return buffer_puts(b, word);
 }
 
+static const char k_precision_block[] =
+    "precision highp float;\n"
+    "precision highp int;\n"
+    "precision highp sampler2D;\n"
+    "precision highp sampler3D;\n"
+    "precision highp samplerCube;\n"
+    "precision highp sampler2DShadow;\n"
+    "precision highp samplerCubeShadow;\n"
+    "precision highp sampler2DArray;\n"
+    "precision highp sampler2DArrayShadow;\n"
+    "precision highp isampler2D;\n"
+    "precision highp isampler3D;\n"
+    "precision highp isamplerCube;\n"
+    "precision highp isampler2DArray;\n"
+    "precision highp usampler2D;\n"
+    "precision highp usampler3D;\n"
+    "precision highp usamplerCube;\n"
+    "precision highp usampler2DArray;\n";
+
 int titangl_translate_shader(const char *source, size_t length, int is_vertex,
                              titangl_shader *out)
 {
@@ -420,6 +439,8 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
     int source_es = 0;
     size_t body;
     text_buffer b;
+    text_buffer extensions;
+    size_t header_length;
     size_t i;
     int line_start = 1;
     int pending_location = -1;
@@ -430,6 +451,7 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
     }
     memset(out, 0, sizeof(*out));
     memset(&b, 0, sizeof(b));
+    memset(&extensions, 0, sizeof(extensions));
 
     body = find_version(source, length, &version, &source_es);
     out->source_version = version;
@@ -445,26 +467,7 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
     if (buffer_puts(&b, header) != 0) {
         goto oom;
     }
-    if (buffer_puts(&b,
-                    "precision highp float;\n"
-                    "precision highp int;\n"
-                    "precision highp sampler2D;\n"
-                    "precision highp sampler3D;\n"
-                    "precision highp samplerCube;\n"
-                    "precision highp sampler2DShadow;\n"
-                    "precision highp samplerCubeShadow;\n"
-                    "precision highp sampler2DArray;\n"
-                    "precision highp sampler2DArrayShadow;\n"
-                    "precision highp isampler2D;\n"
-                    "precision highp isampler3D;\n"
-                    "precision highp isamplerCube;\n"
-                    "precision highp isampler2DArray;\n"
-                    "precision highp usampler2D;\n"
-                    "precision highp usampler3D;\n"
-                    "precision highp usamplerCube;\n"
-                    "precision highp usampler2DArray;\n") != 0) {
-        goto oom;
-    }
+    header_length = b.length;
 
     i = body;
     while (i < length) {
@@ -513,13 +516,22 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
                         m++;
                     }
                     if (drop) {
-                        if (buffer_puts(&b, "// titan: dropped desktop #extension\n") != 0) {
-                            goto oom;
-                        }
                         i = line_end < length ? line_end + 1 : length;
                         line_start = 1;
                         continue;
                     }
+                    /*
+                     * GLSL requires #extension directives before any other
+                     * declaration.  Keep the line, but move it to the header
+                     * between #version and the precision block.
+                     */
+                    size_t ext_end = (line_end < length) ? line_end + 1 : line_end;
+                    if (buffer_putn(&extensions, source + j, ext_end - j) != 0) {
+                        goto oom;
+                    }
+                    i = ext_end;
+                    line_start = 1;
+                    continue;
                 }
             }
         }
@@ -748,16 +760,16 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
     {
         text_buffer final;
         memset(&final, 0, sizeof(final));
-        size_t header_end = 0;
-        /* the preamble ends right after the last precision line */
-        const char *marker = "precision highp usampler2DArray;\n";
-        const char *found = b.data ? strstr(b.data, marker) : NULL;
-        if (found) {
-            header_end = (size_t)(found - b.data) + strlen(marker);
-        } else {
-            header_end = b.length;
+        if (buffer_putn(&final, b.data, header_length) != 0) {
+            buffer_free(&final);
+            goto oom;
         }
-        if (buffer_putn(&final, b.data, header_end) != 0) {
+        if (extensions.length &&
+            buffer_putn(&final, extensions.data, extensions.length) != 0) {
+            buffer_free(&final);
+            goto oom;
+        }
+        if (buffer_puts(&final, k_precision_block) != 0) {
             buffer_free(&final);
             goto oom;
         }
@@ -778,11 +790,12 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
                 goto oom;
             }
         }
-        if (buffer_putn(&final, b.data + header_end, b.length - header_end) != 0) {
+        if (buffer_putn(&final, b.data + header_length, b.length - header_length) != 0) {
             buffer_free(&final);
             goto oom;
         }
         buffer_free(&b);
+        buffer_free(&extensions);
         b = final;
     }
 
@@ -793,6 +806,7 @@ int titangl_translate_shader(const char *source, size_t length, int is_vertex,
 
 oom:
     buffer_free(&b);
+    buffer_free(&extensions);
     set_error(out, "out of memory while translating the shader");
     return -1;
 }

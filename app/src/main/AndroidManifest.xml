@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="AllFilesAccessPolicy,ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+    <application
+        android:label="TitanLD"
+        android:icon="@drawable/ic_launcher"
+        android:allowBackup="false"
+        android:requestLegacyExternalStorage="true"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TitanLD">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <meta-data android:name="fclPlugin" android:value="true" />
+        <meta-data android:name="des" android:value="TitanLD (TitanGL, OpenGL 4.6, 1.17+)" />
+        <meta-data android:name="renderer" android:value="TitanLD:libtitanld.so:libtitanld.so" />
+        <meta-data android:name="boatEnv" android:value="LIBGL_ES=3:MG_COUNT_LAUNCH=1" />
+        <meta-data
+            android:name="pojavEnv"
+            android:value="LIBGL_ES=3:POJAV_RENDERER=opengles3:POJAVEXEC_EGL=libtitanld.so:LIBGL_EGL=libtitanld.so:MG_COUNT_LAUNCH=1" />
+        <meta-data android:name="minMCVer" android:value="1.17" />
+        <meta-data android:name="maxMCVer" android:value="" />
+    </application>
+</manifest>
