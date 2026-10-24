@@ -156,12 +156,18 @@ for abi in "${ABIS[@]}"; do
     *"${EXPECT_MACHINE[$abi]}"*) ;;
     *) die "lib/$abi has the wrong ELF machine: $machine" ;;
   esac
+  # Capture the tool output before grepping.  A `tool | grep -q` pipeline
+  # under `set -o pipefail` is racy: grep exits at the first match, the tool
+  # gets SIGPIPE and the pipeline reports failure even though the symbol was
+  # found.
+  nm_out="$("$LLVM_NM" -D --defined-only "$lib")"
   for sym in eglGetProcAddress eglCreateContext glCreateShader glShaderSource \
              glGetString glDrawElementsBaseVertex glMapBuffer; do
-    "$LLVM_NM" -D --defined-only "$lib" | grep -q " $sym\$" \
+    grep -q " $sym\$" <<<"$nm_out" \
       || die "lib/$abi is missing the exported symbol $sym"
   done
-  if "$LLVM_READELF" -d "$lib" | grep -q 'libGLESv3\.so'; then
+  dyn_out="$("$LLVM_READELF" -d "$lib")"
+  if grep -q 'libGLESv3\.so' <<<"$dyn_out"; then
     die "lib/$abi must not hard-link libGLESv3.so; it dispatches through dlopen"
   fi
   log "ABI $abi: $machine, $(stat -c%s "$lib") bytes, symbols OK"
@@ -229,10 +235,11 @@ log "signed: $OUT"
 log "package contents:"
 unzip -l "$OUT" | grep -E 'classes.dex|resources.arsc|lib/.+/libtitanld.so|assets/' >&2 || true
 
+zip_listing="$(unzip -l "$OUT")"
 for abi in "${ABIS[@]}"; do
-  unzip -l "$OUT" | grep -q "lib/$abi/libtitanld.so" \
+  grep -q "lib/$abi/libtitanld.so" <<<"$zip_listing" \
     || die "built APK is missing lib/$abi/libtitanld.so"
-  if unzip -l "$OUT" | grep -q "lib/$abi/libmobileglues.so"; then
+  if grep -q "lib/$abi/libmobileglues.so" <<<"$zip_listing"; then
     die "built APK must not contain MobileGlues"
   fi
 done
