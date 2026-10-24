@@ -33,8 +33,12 @@ jobs:
       - name: Prove the custom renderer replaced MobileGlues
         run: |
           test -f build/TitanLD-2.0.0.apk
-          ! unzip -l build/TitanLD-2.0.0.apk | grep -q libmobileglues.so
-          unzip -l build/TitanLD-2.0.0.apk | grep -E 'lib/.+/libtitanld.so'
+          listing="$(unzip -l build/TitanLD-2.0.0.apk)"
+          if grep -q libmobileglues.so <<<"$listing"; then
+            echo "MobileGlues is still in the APK" >&2
+            exit 1
+          fi
+          grep -E 'lib/.+/libtitanld.so' <<<"$listing"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
