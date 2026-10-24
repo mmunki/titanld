@@ -19,14 +19,22 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Show Android SDK
+      - name: Show Android SDK and NDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
           ls "$ANDROID_HOME/build-tools" | sort -V | tail -3
           ls "$ANDROID_HOME/platforms" | sort -V | tail -3
+          ls "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" 2>/dev/null || true
 
-      - name: Build and verify the APK
+      - name: Build, test every ABI and verify the APK
         run: bash build.sh
+
+      - name: Prove the custom renderer replaced MobileGlues
+        run: |
+          test -f build/TitanLD-2.0.0.apk
+          ! unzip -l build/TitanLD-2.0.0.apk | grep -q libmobileglues.so
+          unzip -l build/TitanLD-2.0.0.apk | grep -E 'lib/.+/libtitanld.so'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

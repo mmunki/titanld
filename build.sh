@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
 # ============================================================================
 # build.sh -- build TitanLD's release APK with the Android SDK command line
-# tools only.  No Gradle, no network dependency beyond the pinned renderer
-# core download.
+# tools and the NDK.  No Gradle, no network access.
 #
 # Inputs (environment, all optional):
 #   ANDROID_HOME / ANDROID_SDK_ROOT   the Android SDK location
+#   ANDROID_NDK_HOME / ANDROID_NDK_ROOT  the NDK location (auto-detected under
+#                                     $ANDROID_HOME/ndk when not set)
 #   TITANLD_KEYSTORE                  an existing signing keystore
 #   TITANLD_KEYSTORE_PASSWORD         its store password
 #   TITANLD_KEY_ALIAS                 the key alias
 #   TITANLD_KEY_PASSWORD              the key password
 #
 # Output: build/TitanLD-<version>.apk
+#
+# The renderer is TitanGL, TitanLD's own C core in src/native.  MobileGlues is
+# no longer downloaded or packaged; the APK contains only libtitanld.so built
+# from this tree.
 # ============================================================================
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-VERSION_NAME="1.0.0"
-VERSION_CODE="1"
-CORE_VERSION="2.0.0"
-CORE_APK="MobileGlues_${CORE_VERSION}.apk"
-CORE_URL="https://github.com/MobileGL-Dev/MobileGlues-release/releases/download/V${CORE_VERSION}/${CORE_APK}"
-CORE_SHA256="a7e1eb29731fdece7ab3af7fb00692b856f1808a7544436e7b3eb6c08355581a"
+VERSION_NAME="2.0.0"
+VERSION_CODE="2"
 ABIS=(arm64-v8a armeabi-v7a x86 x86_64)
 MIN_SDK=26
 TARGET_SDK=34
@@ -39,8 +40,6 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 pick_latest() { # pick_latest <dir> <glob-prefix> [required-file]
   local dir="$1" prefix="$2" required="${3:-}"
   local candidate
-  # Prefer a stable directory; only fall back to previews/betas when nothing
-  # stable is installed.  sorted -V puts android-36 after android-35.
   candidate="$(
     find "$dir" -maxdepth 1 -mindepth 1 -type d -name "${prefix}*" 2>/dev/null \
       | grep -viE 'beta|preview|rc[0-9]|canary|dev' \
@@ -62,61 +61,118 @@ pick_latest() { # pick_latest <dir> <glob-prefix> [required-file]
 
 BUILD_TOOLS="$(pick_latest "$SDK/build-tools" "" aapt2)"
 PLATFORM="$(pick_latest "$SDK/platforms" "android-" android.jar)"
-for tool in aapt2 d8 apksigner zipalign; do
+for tool in aapt2 d8 apksigner zipalign dexdump; do
   [ -x "$BUILD_TOOLS/$tool" ] || die "missing $BUILD_TOOLS/$tool"
 done
 ANDROID_JAR="$PLATFORM/android.jar"
+
+# ----------------------------------------------------------------------- NDK
+NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+if [ -z "$NDK" ] && [ -d "$SDK/ndk" ]; then
+  NDK="$(pick_latest "$SDK/ndk" "" source.properties)"
+fi
+[ -n "$NDK" ] || die "set ANDROID_NDK_HOME or install an NDK under $SDK/ndk"
+[ -d "$NDK" ] || die "Android NDK not found: $NDK"
+
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)  HOST_TAG=linux-x86_64 ;;
+  Linux-aarch64) HOST_TAG=linux-aarch64 ;;
+  Darwin-x86_64) HOST_TAG=darwin-x86_64 ;;
+  Darwin-arm64)  HOST_TAG=darwin-x86_64 ;;
+  *) die "unsupported build host: $(uname -s)-$(uname -m)" ;;
+esac
+
+TC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin"
+LLVM_NM="$TC/llvm-nm"
+LLVM_READELF="$TC/llvm-readelf"
+[ -x "$LLVM_NM" ] || die "missing $LLVM_NM"
+[ -x "$LLVM_READELF" ] || die "missing $LLVM_READELF"
+
+declare -A CC=(
+  [arm64-v8a]="$TC/aarch64-linux-android${MIN_SDK}-clang"
+  [armeabi-v7a]="$TC/armv7a-linux-androideabi${MIN_SDK}-clang"
+  [x86]="$TC/i686-linux-android${MIN_SDK}-clang"
+  [x86_64]="$TC/x86_64-linux-android${MIN_SDK}-clang"
+)
+for abi in "${ABIS[@]}"; do
+  [ -x "${CC[$abi]}" ] || die "missing compiler for $abi: ${CC[$abi]}"
+done
+
 log "SDK:          $SDK"
 log "build-tools:  $(basename "$BUILD_TOOLS")"
 log "platform:     $(basename "$PLATFORM")"
+log "NDK:          $NDK"
 
 command -v javac   >/dev/null || die "javac (JDK 17+) is required"
 command -v keytool >/dev/null || die "keytool (JDK 17+) is required"
-command -v curl    >/dev/null || die "curl is required"
 command -v unzip   >/dev/null || die "unzip is required"
 command -v zip     >/dev/null || die "zip is required"
 command -v sha256sum >/dev/null || die "sha256sum is required"
+command -v file    >/dev/null || die "file is required"
 
-# ------------------------------------------------------- renderer core asset
 WORK="$ROOT/build"
-CACHE="$WORK/cache"
 rm -rf "$WORK"
-mkdir -p "$CACHE" "$WORK/lib" "$WORK/gen" "$WORK/classes" "$WORK/dex" "$WORK/assets"
+mkdir -p "$WORK/lib" "$WORK/gen" "$WORK/classes" "$WORK/dex" "$WORK/assets" "$WORK/test"
 
-MG_APK="$CACHE/$CORE_APK"
-if [ ! -f "$MG_APK" ]; then
-  log "downloading renderer core $CORE_VERSION"
-  curl -fL --retry 3 --retry-delay 2 -o "$MG_APK.part" "$CORE_URL"
-  mv "$MG_APK.part" "$MG_APK"
-fi
-echo "$CORE_SHA256  $MG_APK" | sha256sum -c - >/dev/null \
-  || die "renderer core checksum mismatch: $MG_APK"
-log "renderer core verified: sha256 $CORE_SHA256"
+# ------------------------------------------------------- host translator test
+HOST_CC="${HOST_CC:-cc}"
+log "running the host shader-translator tests"
+"$HOST_CC" -std=c11 -O2 -Wall -Wextra \
+  -o "$WORK/test/glsl_test" tests/glsl_test.c src/native/glsl.c
+"$WORK/test/glsl_test"
 
-for abi in "${ABIS[@]}"; do
-  mkdir -p "$WORK/lib/$abi"
-  unzip -p "$MG_APK" "lib/$abi/libmobileglues.so" > "$WORK/lib/$abi/libmobileglues.so"
-  [ -s "$WORK/lib/$abi/libmobileglues.so" ] || die "renderer core has no lib/$abi/libmobileglues.so"
-done
+# ------------------------------------------------------------- TitanGL core
+build_abi() {
+  local abi="$1"
+  local obj="$WORK/obj/$abi"
+  local cc="${CC[$abi]}"
+  local src
+  mkdir -p "$obj" "$WORK/lib/$abi"
+  for src in src/native/*.c; do
+    "$cc" -std=c11 -O2 -fPIC -Wall -Wextra -Wno-unused-parameter \
+      -Isrc/native -DANDROID \
+      -c "$src" -o "$obj/$(basename "${src%.c}").o"
+  done
+  "$cc" -shared -o "$WORK/lib/$abi/libtitanld.so" "$obj"/*.o \
+    -Wl,-soname,libtitanld.so -Wl,--no-undefined \
+    -Wl,-z,relro,-z,now \
+    -llog -lEGL -landroid -ldl -lm
+}
 
-# ABI validation: every packaged library must really be ELF of its ABI.
-declare -A EXPECT=(
-  [arm64-v8a]='ARM aarch64'
+declare -A EXPECT_MACHINE=(
+  [arm64-v8a]='AArch64'
   [armeabi-v7a]='ARM'
   [x86]='Intel 80386'
-  [x86_64]='x86-64'
+  [x86_64]='Advanced Micro Devices X86-64'
 )
+
 for abi in "${ABIS[@]}"; do
-  desc="$(file -b "$WORK/lib/$abi/libmobileglues.so")"
-  case "$desc" in
-    *"${EXPECT[$abi]}"*) ;;
-    *) die "lib/$abi is not ${EXPECT[$abi]}: $desc" ;;
+  log "building TitanGL for $abi"
+  build_abi "$abi"
+  lib="$WORK/lib/$abi/libtitanld.so"
+  [ -s "$lib" ] || die "TitanGL did not produce $lib"
+  machine="$("$LLVM_READELF" -h "$lib" | awk '/Machine:/{print substr($0, index($0,$2))}')"
+  case "$machine" in
+    *"${EXPECT_MACHINE[$abi]}"*) ;;
+    *) die "lib/$abi has the wrong ELF machine: $machine" ;;
   esac
-  log "ABI $abi: ${desc%%,*} ($(stat -c%s "$WORK/lib/$abi/libmobileglues.so") bytes)"
+  for sym in eglGetProcAddress eglCreateContext glCreateShader glShaderSource \
+             glGetString glDrawElementsBaseVertex glMapBuffer; do
+    "$LLVM_NM" -D --defined-only "$lib" | grep -q " $sym\$" \
+      || die "lib/$abi is missing the exported symbol $sym"
+  done
+  if "$LLVM_READELF" -d "$lib" | grep -q 'libGLESv3\.so'; then
+    die "lib/$abi must not hard-link libGLESv3.so; it dispatches through dlopen"
+  fi
+  log "ABI $abi: $machine, $(stat -c%s "$lib") bytes, symbols OK"
 done
 
 # ----------------------------------------------------------------- resources
 cp -R "$ROOT/assets/." "$WORK/assets/" 2>/dev/null || true
+# The MobileGlues licence belongs to the 1.0.0 release; it is kept in the
+# source tree but is not part of the custom-renderer APK.
+rm -f "$WORK/assets/licenses/MobileGlues-LGPL-2.1.txt"
+cp "$ROOT/LICENSE" "$WORK/assets/LICENSE.txt"
 "$BUILD_TOOLS/aapt2" compile --dir "$ROOT/res" -o "$WORK/res.zip"
 "$BUILD_TOOLS/aapt2" link \
   -o "$WORK/base.apk" \
@@ -171,11 +227,14 @@ log "signed: $OUT"
 
 # ---------------------------------------------------------------- verification
 log "package contents:"
-unzip -l "$OUT" | grep -E 'classes.dex|resources.arsc|lib/.+/libmobileglues.so|assets/' >&2 || true
+unzip -l "$OUT" | grep -E 'classes.dex|resources.arsc|lib/.+/libtitanld.so|assets/' >&2 || true
 
 for abi in "${ABIS[@]}"; do
-  unzip -l "$OUT" | grep -q "lib/$abi/libmobileglues.so" \
-    || die "built APK is missing lib/$abi/libmobileglues.so"
+  unzip -l "$OUT" | grep -q "lib/$abi/libtitanld.so" \
+    || die "built APK is missing lib/$abi/libtitanld.so"
+  if unzip -l "$OUT" | grep -q "lib/$abi/libmobileglues.so"; then
+    die "built APK must not contain MobileGlues"
+  fi
 done
 
 BADGING="$("$BUILD_TOOLS/aapt2" dump badging "$OUT")"
@@ -186,11 +245,10 @@ grep -q "application-label:'TitanLD'" <<<"$BADGING" \
 "$BUILD_TOOLS/dexdump" "$OUT" > "$WORK/dexdump.txt" 2>/dev/null
 grep -q 'Lio/github/mmunki/titanld/MainActivity;' "$WORK/dexdump.txt" \
   || die "MainActivity is missing from classes.dex"
-unzip -p "$OUT" "assets/licenses/MobileGlues-LGPL-2.1.txt" > "$WORK/lgpl.txt"
-grep -q "GNU LESSER GENERAL PUBLIC LICENSE" "$WORK/lgpl.txt" \
-  || die "LGPL licence text is missing from assets"
+unzip -p "$OUT" "assets/THIRD_PARTY_NOTICES.md" >/dev/null \
+  || die "third-party notices are missing from the APK"
 for abi in "${ABIS[@]}"; do
   grep -q "'$abi'" <<<"$BADGING" || die "badging does not list ABI $abi"
 done
-log "APK verified: package, label, dex, signature and all four ABIs"
+log "APK verified: package, label, dex, signature, notices and all four ABIs"
 printf '\n%s\n' "$OUT"

@@ -15,6 +15,8 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
 
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
     <application
         android:label="TitanLD"
         android:icon="@drawable/ic_launcher"
@@ -34,15 +36,15 @@
         </activity>
 
         <!-- Renderer plug-in metadata understood by Fold Craft Launcher, Zalith
-             Launcher and Pojav-based launchers. The library name stays
-             libmobileglues.so because that is the renderer core TitanLD ships. -->
+             Launcher and Pojav-based launchers.  libtitanld.so is TitanGL,
+             TitanLD's own renderer core; no MobileGlues library is shipped. -->
         <meta-data android:name="fclPlugin" android:value="true" />
-        <meta-data android:name="des" android:value="TitanLD (OpenGL 4.6, 1.17+)" />
-        <meta-data android:name="renderer" android:value="TitanLD:libmobileglues.so:libmobileglues.so" />
+        <meta-data android:name="des" android:value="TitanLD (TitanGL, OpenGL 4.6, 1.17+)" />
+        <meta-data android:name="renderer" android:value="TitanLD:libtitanld.so:libtitanld.so" />
         <meta-data android:name="boatEnv" android:value="LIBGL_ES=3:MG_COUNT_LAUNCH=1" />
         <meta-data
             android:name="pojavEnv"
-            android:value="LIBGL_ES=3:POJAV_RENDERER=opengles3:POJAVEXEC_EGL=libmobileglues.so:LIBGL_EGL=libmobileglues.so:MG_COUNT_LAUNCH=1" />
+            android:value="LIBGL_ES=3:POJAV_RENDERER=opengles3:POJAVEXEC_EGL=libtitanld.so:LIBGL_EGL=libtitanld.so:MG_COUNT_LAUNCH=1" />
         <meta-data android:name="minMCVer" android:value="1.17" />
         <meta-data android:name="maxMCVer" android:value="" />
     </application>

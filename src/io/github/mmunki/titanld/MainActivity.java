@@ -33,10 +33,10 @@ import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
 
-    private static final String VERSION = "1.0.0";
-    private static final String CORE = "MobileGlues 2.0.0";
-    private static final String MG_DIR = "MG";
-    private static final String MG_CONFIG = "config.json";
+    private static final String VERSION = "2.0.0";
+    private static final String CORE = "TitanGL 0.1.0 (custom)";
+    private static final String TITANLD_DIR = "TitanLD";
+    private static final String TITANLD_CONFIG = "config.json";
     private static final int REQ_LEGACY_STORAGE = 4101;
 
     private static final int BG = Color.rgb(11, 14, 20);
@@ -128,11 +128,11 @@ public class MainActivity extends Activity {
         applyButton.setOnClickListener(v -> applyConfig(false));
         root.addView(applyButton, buttonParams());
 
-        Button viewButton = button("View /sdcard/MG/config.json", false);
+        Button viewButton = button("View /sdcard/TitanLD/config.json", false);
         viewButton.setOnClickListener(v -> showConfig());
         root.addView(viewButton, buttonParams());
 
-        Button licencesButton = button("Third-party licences", false);
+        Button licencesButton = button("Licence", false);
         licencesButton.setOnClickListener(v -> showLicences());
         root.addView(licencesButton, buttonParams());
 
@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
         root.addView(aboutButton, buttonParams());
 
         TextView footer = text(
-                "TitanLD ships the unmodified MobileGlues renderer core and adds "
+                "TitanLD ships TitanGL, its own GL-to-GLES renderer core, and adds "
                         + "storage access plus a configuration manager. No network permission.",
                 12, MUTED, false);
         footer.setLineSpacing(dp(3), 1f);
@@ -239,7 +239,7 @@ public class MainActivity extends Activity {
         rendererValue.setTextColor(TEXT);
 
         String abi = Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "unknown";
-        File lib = new File(getApplicationInfo().nativeLibraryDir, "libmobileglues.so");
+        File lib = new File(getApplicationInfo().nativeLibraryDir, "libtitanld.so");
         boolean ready = lib.isFile();
         abiValue.setText(abi + (ready ? " · ready" : " · missing"));
         abiValue.setTextColor(ready ? TEXT : RED);
@@ -253,17 +253,17 @@ public class MainActivity extends Activity {
         applyButton.setAlpha(access ? 1f : 0.45f);
 
         if (access) {
-            storageHint.setText("TitanLD can write /sdcard/MG. The launcher reads that folder "
-                    + "and the renderer core uses it for config.json, shader cache and logs.");
+            storageHint.setText("TitanLD can write /sdcard/TitanLD. The renderer reads "
+                    + "/sdcard/TitanLD/config.json on the next game start.");
             storageHint.setTextColor(MUTED);
         } else if (Build.VERSION.SDK_INT >= 30) {
             storageHint.setText("Grant \u201cAll files access\u201d so TitanLD can create and tune "
-                    + "/sdcard/MG/config.json. Without it the renderer still loads in the launcher, "
+                    + "/sdcard/TitanLD/config.json. Without it the renderer still loads in the launcher, "
                     + "but it uses built-in defaults.");
             storageHint.setTextColor(AMBER);
         } else {
             storageHint.setText("Grant storage permission so TitanLD can create and tune "
-                    + "/sdcard/MG/config.json.");
+                    + "/sdcard/TitanLD/config.json.");
             storageHint.setTextColor(AMBER);
         }
     }
@@ -298,11 +298,11 @@ public class MainActivity extends Activity {
     }
 
     private File mgDir() {
-        return new File(Environment.getExternalStorageDirectory(), MG_DIR);
+        return new File(Environment.getExternalStorageDirectory(), TITANLD_DIR);
     }
 
     private File configFile() {
-        return new File(mgDir(), MG_CONFIG);
+        return new File(mgDir(), TITANLD_CONFIG);
     }
 
     private void seedIfMissing() {
@@ -311,7 +311,7 @@ public class MainActivity extends Activity {
         }
         try {
             writeConfig();
-            toast("Created /sdcard/MG/config.json");
+            toast("Created /sdcard/TitanLD/config.json");
         } catch (Exception ignored) {
             // The status row keeps showing "Not created"; the action button reports details.
         }
@@ -326,12 +326,12 @@ public class MainActivity extends Activity {
         if (!replace && configFile().isFile()) {
             new AlertDialog.Builder(this)
                     .setTitle("Replace existing config?")
-                    .setMessage("MG/config.json already exists. TitanLD's recommended profile will "
+                    .setMessage("/sdcard/TitanLD/config.json already exists. TitanLD's recommended profile will "
                             + "replace it. The renderer reads this file on the next game start.")
                     .setPositiveButton("Replace", (d, w) -> {
                         try {
                             writeConfig();
-                            toast("Recommended settings written.");
+                            toast("TitanGL settings written.");
                             refresh();
                         } catch (Exception e) {
                             showError(e);
@@ -343,7 +343,7 @@ public class MainActivity extends Activity {
         }
         try {
             writeConfig();
-            toast("Recommended settings written.");
+            toast("TitanGL settings written.");
             refresh();
         } catch (Exception e) {
             showError(e);
@@ -357,7 +357,7 @@ public class MainActivity extends Activity {
         }
         byte[] bytes = recommendedConfig().getBytes(StandardCharsets.UTF_8);
         File target = configFile();
-        File tmp = new File(dir, MG_CONFIG + ".titanld.tmp");
+        File tmp = new File(dir, TITANLD_CONFIG + ".titanld.tmp");
         FileOutputStream out = new FileOutputStream(tmp);
         try {
             out.write(bytes);
@@ -381,21 +381,16 @@ public class MainActivity extends Activity {
     private String recommendedConfig() {
         try {
             JSONObject o = new JSONObject();
-            o.put("enableANGLE", 1);
-            o.put("enableNoError", 0);
-            o.put("enableExtComputeShader", 0);
-            o.put("enableExtTimerQuery", 1);
-            o.put("enableExtDirectStateAccess", 0);
+            o.put("glVersion", "4.6");
             o.put("maxGlslCacheSize", 64);
-            o.put("angleDepthClearFixMode", 0);
-            o.put("customGLVersion", 0);
-            o.put("fsr1Setting", 0);
-            o.put("hideMGEnvLevel", 0);
-            o.put("multidrawOrder",
-                    "native,multiindirect,multibasevertex,multiarrays,indirect,basevertex,unroll,compute");
+            o.put("logLevel", 3);
+            o.put("forceGLESVersion", 0);
+            o.put("dropDesktopExtensions", true);
             return o.toString(2) + "\n";
         } catch (Exception e) {
-            return "{\n  \"enableANGLE\": 1,\n  \"maxGlslCacheSize\": 64\n}\n";
+            return "{\n  \"glVersion\": \"4.6\",\n  \"maxGlslCacheSize\": 64,\n"
+                    + "  \"logLevel\": 3,\n  \"forceGLESVersion\": 0,\n"
+                    + "  \"dropDesktopExtensions\": true\n}\n";
         }
     }
 
@@ -403,7 +398,7 @@ public class MainActivity extends Activity {
         File cfg = configFile();
         String body;
         if (!cfg.isFile()) {
-            body = "/sdcard/MG/config.json does not exist yet.\n\n"
+            body = "/sdcard/TitanLD/config.json does not exist yet.\n\n"
                     + "Grant storage access and tap \u201cApply recommended settings\u201d.";
         } else {
             try {
@@ -422,7 +417,7 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.addView(tv);
         new AlertDialog.Builder(this)
-                .setTitle("MG/config.json")
+                .setTitle("/sdcard/TitanLD/config.json")
                 .setView(sv)
                 .setPositiveButton("Close", null)
                 .show();
@@ -431,15 +426,14 @@ public class MainActivity extends Activity {
     private void showAbout() {
         String msg = "TitanLD " + VERSION + "\n\n"
                 + "Renderer core: " + CORE + "\n"
-                + "Upstream: github.com/MobileGL-Dev/MobileGlues (LGPL-2.1)\n"
                 + "Project: github.com/mmunki/titanld\n\n"
-                + "TitanLD packages the unmodified MobileGlues renderer library and adds "
-                + "storage access, a recommended configuration and a manager UI. It does not "
-                + "include a Minecraft launcher. Select \u201cTitanLD\u201d as the renderer in "
-                + "Fold Craft Launcher, Zalith Launcher or a Pojav-based launcher.\n\n"
-                + "The app declares no INTERNET permission. The MobileGlues core is free "
-                + "software under the GNU LGPL-2.1; its licence is included in the APK and "
-                + "in the source archive of every release.";
+                + "TitanLD ships TitanGL, its own EGL/GLES renderer and GLSL translator, "
+                + "plus storage access, a recommended configuration and a manager UI. It "
+                + "does not include a Minecraft launcher. Select \u201cTitanLD\u201d as the "
+                + "renderer in Fold Craft Launcher, Zalith Launcher or a Pojav-based "
+                + "launcher.\n\n"
+                + "The app declares no INTERNET permission. TitanLD's own code is MIT; the "
+                + "licence is included in the APK and in the source archive of every release.";
         new AlertDialog.Builder(this)
                 .setTitle("About TitanLD")
                 .setMessage(msg)
@@ -450,7 +444,7 @@ public class MainActivity extends Activity {
     private void showLicences() {
         String body;
         try {
-            InputStream in = getAssets().open("licenses/MobileGlues-LGPL-2.1.txt");
+            InputStream in = getAssets().open("LICENSE.txt");
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
@@ -460,8 +454,8 @@ public class MainActivity extends Activity {
             in.close();
             body = out.toString("UTF-8");
         } catch (Exception e) {
-            body = "LGPL-2.1, Copyright MobileGL-Dev and contributors.\n"
-                    + "https://github.com/MobileGL-Dev/MobileGlues";
+            body = "MIT License, Copyright the TitanLD contributors.\n"
+                    + "https://github.com/mmunki/titanld";
         }
         TextView tv = new TextView(this);
         tv.setText(body);
@@ -473,7 +467,7 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.addView(tv);
         new AlertDialog.Builder(this)
-                .setTitle("MobileGlues LGPL-2.1")
+                .setTitle("TitanLD MIT License")
                 .setView(sv)
                 .setPositiveButton("Close", null)
                 .show();

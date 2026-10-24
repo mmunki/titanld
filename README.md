@@ -1,110 +1,135 @@
 # TitanLD
 
 TitanLD is an Android renderer plug-in for Minecraft: Java Edition launchers
-(Fold Craft Launcher, Zalith Launcher and Pojav-based launchers). It ships a
-GL-to-GLES renderer core, exposes the storage access the renderer needs, and
-writes a tuned `/sdcard/MG/config.json`.
+(Fold Craft Launcher, Zalith Launcher and Pojav-based launchers).  Version
+2.0.0 replaces the MobileGlues packaging of 1.0.0 with **TitanGL**, TitanLD's
+own renderer core, built from the C sources in `src/native/`.
 
-## What it actually is
+TitanGL is not a wrapper around MobileGlues and does not contain a
+`libmobileglues.so` file.  It creates the OpenGL ES context itself, exports an
+EGL/GL entry-point table, translates desktop GLSL to GLSL ES 3.00, and
+emulates the desktop calls that GLES does not have.
 
-TitanLD **packages the unmodified MobileGlues 2.0.0 renderer core**
-(`libmobileglues.so`, LGPL-2.1) for all four Android ABIs:
+## What is in the APK
 
 | ABI | Renderer library |
 | --- | --- |
-| `arm64-v8a` | `lib/arm64-v8a/libmobileglues.so` |
-| `armeabi-v7a` | `lib/armeabi-v7a/libmobileglues.so` |
-| `x86` | `lib/x86/libmobileglues.so` |
-| `x86_64` | `lib/x86_64/libmobileglues.so` |
+| `arm64-v8a` | `lib/arm64-v8a/libtitanld.so` |
+| `armeabi-v7a` | `lib/armeabi-v7a/libtitanld.so` |
+| `x86` | `lib/x86/libtitanld.so` |
+| `x86_64` | `lib/x86_64/libtitanld.so` |
 
-On top of the core it adds:
+Each `libtitanld.so` is compiled from this repository for the launcher's
+renderer slot.  On top of the core the APK adds:
 
-- the FCL / Zalith / Pojav renderer metadata, so the launcher lists
-  **TitanLD** as a renderer next to the other plug-ins;
+- FCL / Zalith / Pojav renderer metadata pointing at `libtitanld.so`;
 - `MANAGE_EXTERNAL_STORAGE` plus the legacy read/write permissions, with an
   in-app flow that opens the correct system screen;
-- automatic creation of `/sdcard/MG` and a conservative, performance-oriented
-  `config.json` (64 MiB GLSL cache, ANGLE when the launcher supplies it,
-  default MultiDraw order, no experimental image-corrupting options);
-- a small status screen and a viewer for the active configuration;
+- creation of `/sdcard/TitanLD/config.json` with TitanGL's settings;
+- a small status screen, a configuration viewer and the licence;
 - no `INTERNET` permission at all.
 
 It is **not** a Minecraft launcher and it does not contain Minecraft.
 
+## The renderer core
+
+TitanGL lives in `src/native/`:
+
+| File | Purpose |
+| --- | --- |
+| `egl_shim.c` | EGL 1.4/1.5 front-end.  Forces an OpenGL ES 3 context on the system driver, even when the launcher asks for desktop OpenGL, and answers `eglGetProcAddress` from TitanGL's table. |
+| `gl_shim.c` | GL entry points: shader/program tracking, fake desktop version queries, desktop-only call emulation (`glClearDepth`, `glDrawElementsBaseVertex`, `glMapBuffer`, multi-draw, ...), and pass-through dispatch. |
+| `glsl.c` | Token-aware GLSL translator: `#version` rewrite, `attribute`/`varying`, `texture2D` family, `gl_FragColor`/`gl_FragData`, explicit attribute locations, desktop `#extension` removal. |
+| `config.c` | Reads `/sdcard/TitanLD/config.json` (falls back to `/sdcard/MG/config.json`) and built-in defaults. |
+| `proc.c` | Resolves the real system GLES functions through `dlopen`/`dlsym`, so `libtitanld.so` has no hard dependency on `libGLESv3.so`. |
+
+The design and its limits are described in `docs/RENDERER.md`.
+
 ## Honest limits
 
-The request behind this project asked for a renderer that is faster than
-MobileGlues and has no bugs. That cannot be promised, and this project does not
-claim it:
+TitanGL 0.1.0 is a new renderer, not a drop-in replacement for years of
+MobileGlues / gl4es work.  It is honest about what it does today:
 
-- the rendering code is MobileGlues 2.0.0, byte-for-byte; TitanLD changes the
-  packaging, the permissions and the default configuration, not the renderer;
-- "faster than MobileGlues" is device-, driver- and shader-dependent; the only
-  measurable difference here is the larger GLSL cache and the default ANGLE
-  preference. No benchmark result is claimed;
-- no complex renderer can be honestly described as bug-free. The upstream
-  compatibility matrices are the reference:
-  <https://github.com/MobileGL-Dev/MobileGlues-release>.
+- it translates the shader and state paths used by Minecraft 1.17+ (core
+  profile, GLSL 1.20 through 4.60 input) and the launchers in front of it;
+- fixed-function OpenGL 1.x built-ins (`gl_Vertex`, `gl_ModelViewMatrix`,
+  `glBegin`, display lists) are **not** emulated;
+- geometry/tesellation/compute shaders, SSBOs and some desktop-only texture
+  formats are not mapped;
+- a shader that cannot be translated is passed through unchanged, so the
+  driver's compile error points at the real feature instead of producing wrong
+  output silently;
+- no performance claim is made.  The renderer has a per-shader translation
+  step and the emulated base-vertex path rebases indices on the CPU.
 
-If you need a different profile, edit `/sdcard/MG/config.json` from the app or
-with any file manager. The keys are the ones MobileGlues documents in its own
-settings UI.
+The compatibility matrix that matters is the shader set of the game version
+and mods you run.  If a shader fails, the TitanGL log names the shader stage
+and the driver's compile/link log.
 
 ## Install
 
-1. Download `TitanLD-1.0.0.apk` from the release page.
-2. Install it (Android 8.0 or newer).
+1. Download `TitanLD-2.0.0.apk` from the release page.
+2. Install it (Android 8.0 or newer, OpenGL ES 3.0 device).
 3. Open TitanLD and tap **Grant storage access**, then allow *All files
    access* (Android 11+) or storage (Android 8-10).
-4. The app creates `/sdcard/MG/config.json` with the recommended profile.
+4. The app creates `/sdcard/TitanLD/config.json`.
 5. In your launcher, open the renderer/plug-in list and select **TitanLD**.
-   The launcher launches Minecraft with `libmobileglues.so` from this APK.
+   The launcher loads `libtitanld.so` from this APK.
 
 The APK is signed with a build-local key, so a locally rebuilt APK has a
-different signature. Uninstall the previous build before installing a rebuild.
+different signature.  Uninstall the previous build before installing a
+rebuild.
 
-## Configuration written by the app
+## Configuration
 
 ```json
 {
-  "enableANGLE": 1,
-  "enableNoError": 0,
-  "enableExtComputeShader": 0,
-  "enableExtTimerQuery": 1,
-  "enableExtDirectStateAccess": 0,
+  "glVersion": "4.6",
   "maxGlslCacheSize": 64,
-  "angleDepthClearFixMode": 0,
-  "customGLVersion": 0,
-  "fsr1Setting": 0,
-  "hideMGEnvLevel": 0,
-  "multidrawOrder": "native,multiindirect,multibasevertex,multiarrays,indirect,basevertex,unroll,compute"
+  "logLevel": 3,
+  "forceGLESVersion": 0,
+  "dropDesktopExtensions": true
 }
 ```
 
-`enableANGLE: 1` means "enable if the device and the launcher provide ANGLE".
-ANGLE is not bundled in this APK; the launcher supplies it. Experimental
-switches (`enableExtDirectStateAccess`, `fsr1Setting`, a custom GL version) are
-left off because they are the ones that produce rendering artefacts.
+- `glVersion` is the desktop version reported by `glGetString(GL_VERSION)`.
+- `maxGlslCacheSize` is reserved for the on-disk shader cache (reserved, not
+  yet used by 0.1.0).
+- `logLevel` is 1 (error) to 4 (debug); the log tag is `TitanGL`.
+- `forceGLESVersion` is 0 to let TitanGL choose, or 2/3 to force a context
+  version.
+- `dropDesktopExtensions` removes `GL_ARB_*`, `GL_NV_*`, `GL_AMD_*`,
+  `GL_INTEL_*`, `GL_ATI_*` and `GL_KHR_*` extension directives during
+  translation.
 
 ## Build
 
-The build uses only the Android SDK command-line tools; Gradle is not needed.
+The build uses only the Android SDK command line tools and the NDK; Gradle is
+not needed and the build does not touch the network.
 
 ```bash
 export ANDROID_HOME=/path/to/android-sdk
+export ANDROID_NDK_HOME=/path/to/android-ndk   # optional, auto-detected
 ./build.sh
-# build/TitanLD-1.0.0.apk
+# build/TitanLD-2.0.0.apk
 ```
 
 Requirements: JDK 17+, Android SDK build-tools (aapt2, d8, zipalign,
-apksigner) and a platform with `android.jar`. The renderer core is downloaded
-from the pinned upstream release and verified against
-`a7e1eb29731fdece7ab3af7fb00692b856f1808a7544436e7b3eb6c08355581a`.
+apksigner, dexdump), a platform with `android.jar`, and the NDK (clang,
+llvm-nm, llvm-readelf).
 
-The build validates every ABI by reading the ELF header of each packaged
-library, then checks package name, label, dex, signature and the four
-`native-code` entries of the finished APK. See
-`.github/workflows/build.yml` for the CI version.
+The build first runs the host-side translator tests (`tests/glsl_test.c`),
+then compiles TitanGL for every ABI and verifies each library:
+
+- the ELF machine matches the ABI;
+- `eglGetProcAddress`, `eglCreateContext`, `glCreateShader`,
+  `glShaderSource`, `glGetString`, `glDrawElementsBaseVertex` and
+  `glMapBuffer` are exported;
+- there is no hard dependency on `libGLESv3.so`;
+- the finished APK contains exactly four `libtitanld.so` entries and no
+  `libmobileglues.so`.
+
+The ABI matrix and its result are repeated in the release notes.
 
 To reuse one signing identity across builds, point the build at an existing
 keystore:
@@ -119,12 +144,9 @@ TITANLD_KEY_PASSWORD=... \
 
 ## Licence
 
-TitanLD's own code is MIT (see `LICENSE`). The renderer core is
-**MobileGlues 2.0.0**, Copyright MobileGL-Dev, licensed under the
-**GNU LGPL-2.1**. Its licence text is in
-`licenses/MobileGlues-LGPL-2.1.txt` and in the APK assets. The upstream source
-is at <https://github.com/MobileGL-Dev/MobileGlues>; the full source of this
-wrapper is in every release source archive.
+TitanLD's own code, including TitanGL, is MIT (see `LICENSE`).  The repository
+still contains the MobileGlues LGPL notice from release 1.0.0 for reference,
+but no MobileGlues code or binary is used or packaged by this version.
 
-TitanLD is an independent packaging project. It is not affiliated with or
-endorsed by MobileGL-Dev.
+TitanLD is an independent project.  It is not affiliated with or endorsed by
+MobileGL-Dev, Mojang or Microsoft.
